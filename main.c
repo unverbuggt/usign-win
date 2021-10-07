@@ -15,7 +15,13 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#if !defined(__MINGW64__)
 #include <sys/mman.h>
+#else
+#define UNICODE
+#include <windows.h>
+#include <wincrypt.h>
+#endif
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -102,7 +108,7 @@ open_file(const char *filename, bool _read)
 	if (!strcmp(filename, "-"))
 		return _read ? stdin : stdout;
 
-	f = fopen(filename, _read ? "r" : "w");
+	f = fopen(filename, _read ? "rb" : "wb");
 	if (!f)
 		file_error(filename, _read);
 
@@ -232,6 +238,7 @@ static int sign(const char *msgfile)
 		return 1;
 	}
 
+#if !defined(__MINGW64__)
 	mfd = open(msgfile, O_RDONLY, 0);
 	if (mfd < 0 || fstat(mfd, &st) < 0 ||
 		(m = mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, mfd, 0)) == MAP_FAILED) {
@@ -240,12 +247,42 @@ static int sign(const char *msgfile)
 		perror("Cannot open message file");
 		return 1;
 	}
+#else
+	mfd = open(msgfile, O_RDONLY, 0);
+	if (mfd < 0 || fstat(mfd, &st) < 0) {
+		if (mfd >= 0)
+			close(mfd);
+		perror("Cannot open message file");
+		return 1;
+	}
+	HANDLE fm;
+	fm = CreateFileMapping((HANDLE)_get_osfhandle(mfd), NULL, PAGE_READONLY, 0, st.st_size, NULL);
+	if (fm == NULL) {
+		if (mfd >= 0)
+			close(mfd);
+		perror("CreateFileMapping failed");
+		return 1;
+	}
+	m = MapViewOfFile(fm, FILE_MAP_READ, 0, 0, st.st_size);
+	if (m == NULL) {
+		if (mfd >= 0)
+			close(mfd);
+		perror("MapViewOfFile failed");
+		CloseHandle(fm);
+		return 1;
+	}
+	CloseHandle(fm);
+#endif
 	mlen = st.st_size;
 
 	memcpy(sig.fingerprint, skey.fingerprint, sizeof(sig.fingerprint));
 	edsign_sec_to_pub(pubkey, skey.seckey);
 	edsign_sign(sig.sig, pubkey, skey.seckey, m, mlen);
+#if !defined(__MINGW64__)
 	munmap(m, mlen);
+#else
+	UnmapViewOfFile(m);
+#endif
 	close(mfd);
 
 	if (b64_encode(&sig, sizeof(sig), buf, sizeof(buf)) < 0)
@@ -292,6 +329,7 @@ static int generate(void)
 	};
 	struct sha512_state s;
 	char buf[512];
+#if !defined(__MINGW64__)
 	FILE *f;
 
 	f = fopen("/dev/urandom", "r");
@@ -309,6 +347,28 @@ static int generate(void)
 	}
 	if (f)
 		fclose(f);
+
+#else
+	/* Declare variables */
+	HCRYPTPROV hCryptProv;
+	if (CryptAcquireContext(
+		&hCryptProv,
+		NULL,
+		MS_DEF_PROV,
+		PROV_RSA_FULL,
+		CRYPT_VERIFYCONTEXT))
+	{
+		if (CryptGenRandom(hCryptProv,sizeof(skey.fingerprint),skey.fingerprint) != 1 ||
+			CryptGenRandom(hCryptProv,EDSIGN_SECRET_KEY_SIZE,skey.seckey) != 1 ||
+			CryptGenRandom(hCryptProv,sizeof(skey.salt),skey.salt) != 1) {
+			fprintf(stderr, "Can't read data from CryptGenRandom\n");
+			return 1;
+		}
+	} else {
+		fprintf(stderr, "Can't open Cryptographic Provider\n");
+		return 1;
+	}
+#endif
 
 	ed25519_prepare(skey.seckey);
 	edsign_sec_to_pub(skey.seckey + 32, skey.seckey);

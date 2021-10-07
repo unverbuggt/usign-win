@@ -60,6 +60,11 @@
  * IF IBM IS APPRISED OF THE POSSIBILITY OF SUCH DAMAGES.
  */
 
+#if defined(__MINGW64__)
+/* define some types not known to MinGW */
+typedef	unsigned char		u_char;
+#endif
+
 #include <sys/types.h>
 #include <ctype.h>
 #include <stdio.h>
