@@ -119,8 +119,7 @@ static void
 get_file(const char *filename, char *buf, int buflen)
 {
 	FILE *f = open_file(filename, true);
-	int len;
-
+	//first line: untrusted comment
 	while (1) {
 		char *cur = fgets(buf, buflen, f);
 
@@ -133,8 +132,19 @@ get_file(const char *filename, char *buf, int buflen)
 			break;
 	}
 
-	len = fread(buf, 1, buflen - 1, f);
-	buf[len] = 0;
+	//second line: signature
+	while (1) {
+		char *cur = fgets(buf, buflen, f);
+
+		if (!cur) {
+			fprintf(stderr, "Premature end of file\n");
+			exit(1);
+		}
+
+		if (strchr(buf, '\n'))
+			break;
+	}
+
 	fclose(f);
 }
 
